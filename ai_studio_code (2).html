@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TempMail - Temporary Email Service</title>
+    <style>
+        :root {
+            --primary-bg: #f0f4f8;
+            --secondary-bg: #ffffff;
+            --text-color: #333;
+            --primary-color: #007bff;
+            --primary-hover: #0056b3;
+            --border-color: #d1d9e6;
+            --shadow-color: rgba(0, 0, 0, 0.1);
+            --success-color: #28a745;
+            --error-color: #dc3545;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 1rem;
+            background-color: var(--primary-bg);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            background-color: var(--secondary-bg);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px var(--shadow-color);
+            padding: 2rem;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            text-align: center;
+            color: var(--primary-color);
+            margin-top: 0;
+        }
+
+        .email-display-wrapper {
+            display: flex;
+            align-items: center;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+
+        #email-display {
+            flex-grow: 1;
+            padding: 0.75rem;
+            font-size: 1.1rem;
+            font-weight: 500;
+            border: none;
+            background: transparent;
+            outline: none;
+            color: var(--text-color);
+        }
+
+        button {
+            padding: 0.75rem 1.25rem;
+            border: none;
+            border-radius: 6px;
+            background-color: var(--primary-color);
+            color: white;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        #copy-btn {
+            border-top-left-radius: 0;
+            border-bottom-left-radius: 0;
+        }
+
+        .controls {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: center;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        #status-message {
+            text-align: center;
+            min-height: 1.5em;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .inbox-header {
+            font-size: 1.5rem;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        #inbox-container {
+            max-height: 50vh;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 1rem;
+        }
+
+        .email-item {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            overflow: hidden;
+        }
+
+        .email-header {
+            padding: 1rem;
+            background-color: #f8f9fa;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 500;
+        }
+        
+        .email-header:hover {
+            background-color: #e9ecef;
+        }
+
+        .email-body {
+            padding: 1rem;
+            border-top: 1px solid var(--border-color);
+            display: none; /* Initially hidden */
+            white-space: pre-wrap; /* Preserve line breaks */
+            word-wrap: break-word;
+        }
+
+        .email-item.open .email-body {
+            display: block; /* Show on .open class */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Temporary Email Service</h1>
+
+        <div class="email-display-wrapper">
+            <input type="text" id="email-display" value="Click 'Generate New Email' to start" readonly>
+            <button id="copy-btn" disabled>Copy</button>
+        </div>
+
+        <div class="controls">
+            <button id="generate-btn">Generate New Email</button>
+            <button id="refresh-btn" disabled>Refresh Timer</button>
+            <button id="delete-btn" disabled>Delete Email</button>
+        </div>
+
+        <p id="status-message">&nbsp;</p>
+
+        <h2 class="inbox-header">Inbox</h2>
+        <div id="inbox-container">
+            <p>Your emails will appear here...</p>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const API_BASE_URL = 'http://localhost:8000';
+            const WS_BASE_URL = 'ws://localhost:8000';
+
+            // DOM Elements
+            const emailDisplay = document.getElementById('email-display');
+            const copyBtn = document.getElementById('copy-btn');
+            const generateBtn = document.getElementById('generate-btn');
+            const refreshBtn = document.getElementById('refresh-btn');
+            const deleteBtn = document.getElementById('delete-btn');
+            const statusMessage = document.getElementById('status-message');
+            const inboxContainer = document.getElementById('inbox-container');
+
+            let currentEmailId = null;
+            let currentEmailAddress = null;
+            let socket = null;
+
+            // --- State Management ---
+            const loadSession = () => {
+                currentEmailId = sessionStorage.getItem('email_id');
+                currentEmailAddress = sessionStorage.getItem('email_address');
+                if (currentEmailId && currentEmailAddress) {
+                    updateUIForActiveSession();
+                    fetchInbox();
+                    connectWebSocket();
+                } else {
+                    updateUIForNoSession();
+                }
+            };
+
+            const saveSession = (emailId, emailAddress) => {
+                sessionStorage.setItem('email_id', emailId);
+                sessionStorage.setItem('email_address', emailAddress);
+                currentEmailId = emailId;
+                currentEmailAddress = emailAddress;
+            };
+
+            const clearSession = () => {
+                sessionStorage.removeItem('email_id');
+                sessionStorage.removeItem('email_address');
+                currentEmailId = null;
+                currentEmailAddress = null;
+            };
+
+            // --- UI Updates ---
+            const updateUIForActiveSession = () => {
+                emailDisplay.value = currentEmailAddress;
+                copyBtn.disabled = false;
+                refreshBtn.disabled = false;
+                deleteBtn.disabled = false;
+                inboxContainer.innerHTML = '<p>Waiting for new emails...</p>';
+            };
+
+            const updateUIForNoSession = () => {
+                emailDisplay.value = "Click 'Generate New Email' to start";
+                copyBtn.disabled = true;
+                refreshBtn.disabled = true;
+                deleteBtn.disabled = true;
+                inboxContainer.innerHTML = '<p>Your emails will appear here...</p>';
+            };
+
+            const showStatus = (message, isError = false) => {
+                statusMessage.textContent = message;
+                statusMessage.style.color = isError ? 'var(--error-color)' : 'var(--success-color)';
+                setTimeout(() => {
+                    statusMessage.innerHTML = '&nbsp;';
+                }, 4000);
+            };
+
+            const addEmailToDOM = (email) => {
+                // If it's the first email, clear the placeholder text
+                if (inboxContainer.querySelector('p')) {
+                    inboxContainer.innerHTML = '';
+                }
+
+                const emailItem = document.createElement('div');
+                emailItem.className = 'email-item';
+
+                const emailHeader = document.createElement('div');
+                emailHeader.className = 'email-header';
+                emailHeader.innerHTML = `
+                    <span><strong>From:</strong> ${email.sender}</span>
+                    <span><strong>Subject:</strong> ${email.subject}</span>
+                `;
+                emailHeader.onclick = () => emailItem.classList.toggle('open');
+                
+                const emailBody = document.createElement('div');
+                emailBody.className = 'email-body';
+                emailBody.textContent = email.body;
+
+                emailItem.appendChild(emailHeader);
+                emailItem.appendChild(emailBody);
+
+                inboxContainer.prepend(emailItem); // Add new emails to the top
+            };
+
+            // --- WebSocket Logic ---
+            const connectWebSocket = () => {
+                if (socket) {
+                    socket.close();
+                }
+                if (!currentEmailId) return;
+
+                const wsUrl = `${WS_BASE_URL}/ws/inbox/${currentEmailId}`;
+                socket = new WebSocket(wsUrl);
+
+                socket.onopen = () => {
+                    console.log('WebSocket connection established.');
+                    showStatus('Real-time connection active.');
+                };
+
+                socket.onmessage = (event) => {
+                    const email = JSON.parse(event.data);
+                    console.log('New email received via WebSocket:', email);
+                    addEmailToDOM(email);
+                };
+
+                socket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    showStatus('WebSocket connection error.', true);
+                };
+
+                socket.onclose = () => {
+                    console.log('WebSocket connection closed.');
+                    // Don't show an error on manual close/delete
+                    if (currentEmailId) {
+                        showStatus('Real-time connection lost. Will rely on manual checks.', true);
+                    }
+                };
+            };
+            
+            // --- API Calls ---
+            const handleApiCall = async (url, options = {}) => {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || 'An unknown error occurred.');
+                    }
+                    return response.json();
+                } catch (error) {
+                    console.error('API call failed:', error);
+                    showStatus(`Error: ${error.message}`, true);
+                    return null;
+                }
+            };
+
+            const generateNewEmail = async () => {
+                const data = await handleApiCall(`${API_BASE_URL}/api/new_email`);
+                if (data) {
+                    saveSession(data.email_id, data.email_address);
+                    updateUIForActiveSession();
+                    connectWebSocket();
+                    showStatus(`New email generated: ${data.email_address}`);
+                }
+            };
+
+            const fetchInbox = async () => {
+                if (!currentEmailId) return;
+                const data = await handleApiCall(`${API_BASE_URL}/api/check_email/${currentEmailId}`);
+                if (data && data.inbox) {
+                    inboxContainer.innerHTML = '';
+                    if (data.inbox.length === 0) {
+                        inboxContainer.innerHTML = '<p>Inbox is empty. Waiting for new emails...</p>';
+                    } else {
+                        data.inbox.forEach(addEmailToDOM);
+                    }
+                }
+            };
+
+            const deleteCurrentEmail = async () => {
+                if (!currentEmailId) return;
+                const options = {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email_id: currentEmailId }),
+                };
+                const data = await handleApiCall(`${API_BASE_URL}/api/delete_email`, options);
+                if (data) {
+                    if (socket) socket.close();
+                    clearSession();
+                    updateUIForNoSession();
+                    showStatus(data.message);
+                }
+            };
+
+            const refreshEmailTimer = async () => {
+                if (!currentEmailId) return;
+                 const options = {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email_id: currentEmailId }),
+                };
+                const data = await handleApiCall(`${API_BASE_URL}/api/refresh_email`, options);
+                if (data) {
+                    showStatus(data.message);
+                }
+            };
+            
+            // --- Event Listeners ---
+            generateBtn.addEventListener('click', generateNewEmail);
+            deleteBtn.addEventListener('click', deleteCurrentEmail);
+            refreshBtn.addEventListener('click', refreshEmailTimer);
+
+            copyBtn.addEventListener('click', () => {
+                if (!currentEmailAddress) return;
+                navigator.clipboard.writeText(currentEmailAddress).then(() => {
+                    showStatus('Email address copied to clipboard!');
+                }).catch(err => {
+                    showStatus('Failed to copy email address.', true);
+                    console.error('Clipboard copy failed:', err);
+                });
+            });
+
+            // --- Initial Load ---
+            loadSession();
+        });
+    </script>
+</body>
+</html>
